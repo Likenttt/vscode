@@ -592,7 +592,7 @@ export class CodeApplication extends Disposable {
 		let codeWindows: ICodeWindow[] | undefined = undefined;
 		urlService.registerHandler({
 			handleURL(uri: URI, options?: IOpenURLOptions): Promise<boolean> {
-				logService.info('[open-in-desktop] handleURL', uri.toString(), options);
+				logService.info('[open-in-desktop] handleURL', uri.toString(), new Error().stack);
 
 				// Catch file/remote URLs
 				if ((uri.authority === Schemas.file || uri.authority === Schemas.vscodeRemote) && !!uri.path) {
@@ -632,6 +632,15 @@ export class CodeApplication extends Disposable {
 					}
 				}
 
+				// On Mac, Code can be running without any open windows, so we must create a
+				// window to handle urls, if there is none
+				if (isMacintosh && windowsMainService.getWindowCount() === 0) {
+					const cli = { ...environmentService.args };
+					const [window] = windowsMainService.open({ context: OpenContext.API, cli, forceEmpty: true, gotoLineMode: true });
+
+					return window.ready().then(() => urlService.open(uri));
+				}
+
 				return Promise.resolve(false);
 			}
 		});
@@ -641,31 +650,7 @@ export class CodeApplication extends Disposable {
 		const activeWindowRouter = new StaticRouter(ctx => activeWindowManager.getActiveClientId().then(id => ctx === id));
 		const urlHandlerRouter = new URLHandlerRouter(activeWindowRouter);
 		const urlHandlerChannel = electronIpcServer.getChannel('urlHandler', urlHandlerRouter);
-		const multiplexURLHandler = new URLHandlerChannelClient(urlHandlerChannel);
-
-		// On Mac, Code can be running without any open windows, so we must create a window to handle urls,
-		// if there is none
-		if (isMacintosh) {
-			urlService.registerHandler({
-				async handleURL(uri: URI, options?: IOpenURLOptions): Promise<boolean> {
-					if (windowsMainService.getWindowCount() === 0) {
-						logService.info('[open-in-desktop] handleURL EMPTY WINDOW', uri.toString(), options);
-
-						const cli = { ...environmentService.args };
-						const [window] = windowsMainService.open({ context: OpenContext.API, cli, forceEmpty: true, gotoLineMode: true });
-
-						await window.ready();
-
-						return urlService.open(uri);
-					}
-
-					return false;
-				}
-			});
-		}
-
-		// Register the multiple URL handler
-		urlService.registerHandler(multiplexURLHandler);
+		urlService.registerHandler(new URLHandlerChannelClient(urlHandlerChannel));
 
 		// Watch Electron URLs and forward them to the UrlService
 		const args = this.environmentService.args;
